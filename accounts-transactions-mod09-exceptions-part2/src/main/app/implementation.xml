@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:validation="http://www.mulesoft.org/schema/mule/validation" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:ws="http://www.mulesoft.org/schema/mule/ws" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:context="http://www.springframework.org/schema/context" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/ws http://www.mulesoft.org/schema/mule/ws/current/mule-ws.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd">
+    <flow name="processAccountsTransactionsFlow">
+        <flow-ref name="getAccountsFlow" doc:name="getAccountsFlow"/>
+        <dw:transform-message doc:name="Consolidate" metadata:id="12a5d42b-ae42-4534-8134-7d58d8d71bbd">
+            <dw:input-payload doc:sample="accountstransactionsExample.json" mimeType="application/json"/>
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+
+%var directorIDs = ["JKLS483S","FJSA48JD","NMA4FJ9K"]
+
+%function consolidateAccountsTrans (payload)
+//Combines Accounts and Transactions by the Account ID
+//Assigns each account to a director
+  payload.accounts map ((account, index) ->
+  using (id = account.id as :string)
+  (
+    account ++
+    {
+      transactions: payload.transactions filter ($.customerRef == id)
+    } ++
+    {
+      assignedDirector: directorIDs[index mod sizeOf directorIDs]
+    }
+  )
+)
+
+---
+using (data = consolidateAccountsTrans(payload))
+(data groupBy $.assignedDirector)]]></dw:set-payload>
+        </dw:transform-message>
+        <http:request config-ref="HTTP_Request_Accounts_API" path="/accounts_transactions" method="POST" doc:name="POST accounts to Director"/>
+ <dw:transform-message doc:name="Create message">
+     <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	message: "Processed $(sizeOf flowVars.accountsPayload) records."
+}]]></dw:set-payload>
+ </dw:transform-message>
+ <choice-exception-strategy doc:name="Choice Exception Strategy">
+            <catch-exception-strategy when="#[exception.causeMatches('com.mulesoft.weave.*')]" doc:name="Catch Exception Strategy">
+                <set-payload value="Exception caught getting all accounts from accounts REST service #[exception]" doc:name="Set Payload"/>
+            </catch-exception-strategy>
+            <exception-strategy ref="Rest_Request_Choice_Exception_Strategy" doc:name="Reference Exception Strategy"/>
+        </choice-exception-strategy>
+     </flow>
+    <flow name="getAccountsFlow">
+        <validation:is-not-null message="query parameter 'type' is required. The value should be either 'personal' or 'business'." value="#[message.inboundProperties.'http.query.params'.type]" doc:name="Validate type"/>
+        <validation:is-not-null message="Requester-ID header should not be empty." value="#[message.inboundProperties.'Requester-ID']" doc:name="Validate Requester-ID"/>
+        <http:request config-ref="HTTP_Request_Accounts_API" path="${accounts.endpoint}" method="GET" doc:name="Get Accounts">
+            <http:request-builder>
+                <http:query-param paramName="country" value="#[(message.inboundProperties.'http.query.params'.country == empty)? '': message.inboundProperties.'http.query.params'.country ]"/>
+                <http:query-param paramName="name" value="#[(message.inboundProperties.'http.query.params'.name == empty)? '': message.inboundProperties.'http.query.params'.name ]"/>
+                <http:query-param paramName="type" value="#[message.inboundProperties.'http.query.params'.type]"/>
+                <http:header headerName="Requester-ID" value="#[message.inboundProperties.'requester-id']"/>
+            </http:request-builder>
+        </http:request>
+        <dw:transform-message doc:name="Save Payload into Flow Variables" metadata:id="8d0e999a-ef50-413b-9ddf-0dceeac62874">
+            <dw:input-payload mimeType="application/json"/>
+            <dw:set-variable variableName="accountsPayload"><![CDATA[%dw 1.0
+%output application/json
+---
+payload default []]]></dw:set-variable>
+            <dw:set-variable variableName="customerIDList"><![CDATA[%dw 1.0
+%output application/json
+---
+//The default operator will return a default value given on the right side of the keyword 
+//if the left side of the operator returns null. Otherwise, it will return the value on the
+//left side
+{customerIDs: payload.*id default []}]]></dw:set-variable>
+        </dw:transform-message>
+        <flow-ref name="getTransactionsForGivenAccountsFlow" doc:name="getTransactionsForGivenAccountsFlow"/>
+        <choice-exception-strategy doc:name="Choice Exception Strategy">
+            <catch-exception-strategy when="#[exception.causeMatches('com.mulesoft.weave.*')]" doc:name="Catch Exception Strategy">
+                <set-payload value="Exception caught getting all accounts from accounts REST service #[exception]" doc:name="Set Payload"/>
+            </catch-exception-strategy>
+            <exception-strategy ref="Rest_Request_Choice_Exception_Strategy" doc:name="Reference Exception Strategy"/>
+        </choice-exception-strategy>
+    </flow>
+    <flow name="getTransactionsForGivenAccountsFlow">
+        <dw:transform-message doc:name="Create XML Payload for Web Service Consumer" metadata:id="73bf4c45-87f3-4837-a488-317a37352144">
+            <dw:input-variable doc:sample="customerIDsExample.json" mimeType="application/json" variableName="customerIDList"/>
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/xml
+%namespace ns0 http://training.mulesoft.com/
+---
+{
+	ns0#GetTransactionsforCustomers: 
+	{(
+		flowVars.customerIDList.customerIDs map ((customerID , indexOfCustomerID) -> 
+			{customerID: customerID}
+		)
+	)}
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <ws:consumer config-ref="Web_Service_Consumer" operation="GetTransactionsforCustomers" doc:name="Get Transactions"/>
+        <dw:transform-message doc:name="Combine Accounts and Transactions">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	accounts: flowVars.accountsPayload,
+	transactions: payload.GetTransactionsResponse.*transaction default []
+}]]></dw:set-payload>
+        </dw:transform-message>
+                <choice-exception-strategy doc:name="Choice Exception Strategy">
+            <catch-exception-strategy when="#[exception.causeMatches('com.mulesoft.weave.*')]" doc:name="Catch Exception Strategy">
+                <set-payload value="Exception caught getting all accounts from accounts REST service #[exception]" doc:name="Set Payload"/>
+            </catch-exception-strategy>
+            <exception-strategy ref="Soap_Choice_Exception_Strategy" doc:name="Reference Exception Strategy"/>
+        </choice-exception-strategy>
+    </flow>
+</mule>

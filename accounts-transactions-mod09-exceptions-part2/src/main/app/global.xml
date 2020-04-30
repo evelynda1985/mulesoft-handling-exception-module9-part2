@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:cluster="http://www.mulesoft.org/schema/mule/ee/cluster"
+	xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw"
+	xmlns:ws="http://www.mulesoft.org/schema/mule/ws" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata"
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/ws http://www.mulesoft.org/schema/mule/ws/current/mule-ws.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd">
+
+	<context:property-placeholder location="${env}.properties" />
+	<ws:consumer-config name="Web_Service_Consumer"
+		wsdlLocation="http://apdev-accounts-ws.cloudhub.io/api/transactions?wsdl"
+		service="TransactionServiceService" port="TransactionServicePort"
+		serviceAddress="http://apdev-accounts-ws.cloudhub.io/api/transactions"
+		doc:name="Web Service Consumer" />	
+	<http:request-config name="HTTP_Request_Accounts_API" host="${accounts.host}" port="${accounts.port}" doc:name="HTTP Request Configuration" basePath="${accounts.base}" responseTimeout="15000"/>
+    <context:property-placeholder location="${env}.properties"/>
+    	
+    <configuration defaultExceptionStrategy-ref="Default_Choice_Exception_Strategy" doc:name="Configuration">
+        <http:config useTransportForUris="false"/>
+    </configuration>
+
+	<choice-exception-strategy name="Default_Choice_Exception_Strategy">
+		<catch-exception-strategy
+			when="#[exception.causeMatches('com.mulesoft.weave.*')]" doc:name="DW exception">
+			<set-payload value="NO FLIGHTS to #[flowVars.code +  '\n' + exception]"
+				doc:name="Set Payload" />
+			<set-property propertyName="http.status" value="400"
+				doc:name="Property" />
+			<logger level="INFO" doc:name="Logger" />
+		</catch-exception-strategy>
+
+		<catch-exception-strategy
+			when="#[exception.causeMatches('java.lang.OutOfMemoryError')]"
+			doc:name="Catch java.lang.OutOfMemoryError Exception Strategy">
+			<set-property propertyName="http.status" value="500"
+				doc:name="Property" />
+			<set-payload value="#['Out of memory error occured' + exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+		<catch-exception-strategy when="#[exception.causeMatches('java.io.*')]"
+			doc:name="Catch java.io Exception Strategy">
+			<set-property propertyName="http.status" value="500"
+				doc:name="Property" />
+			<set-payload value="#['java.io exception occured: '+exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+		<catch-exception-strategy
+			when="#[exception.causeMatches('InterruptedException')]" doc:name="Catch java.lang.InterruptedException Exception Strategy">
+			<set-property propertyName="http.status" value="500"
+				doc:name="Property" />
+			<set-payload
+				value="#['Java thread InterruptedException occured: ' + exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+
+
+
+
+
+		<catch-exception-strategy
+			doc:name="Data unavailable &#8211; all other exceptions">
+			<set-payload
+				value="Default Exception : DATA IS UNAVAILABLE. TRY LATER. #['\n' + exception] "
+				doc:name="Set Payload" />
+			<set-property propertyName="http.status" value="500"
+				doc:name="Property" />
+			<logger level="INFO" doc:name="Logger" />
+		</catch-exception-strategy>
+	</choice-exception-strategy>
+	
+	<choice-exception-strategy name="Rest_Request_Choice_Exception_Strategy">
+		<catch-exception-strategy
+			when="#[exception.causeMatches('org.mule.module.http.*')]" doc:name="Catch HTTP Module Exception Strategy">
+			<set-property propertyName="http.status" value="500"
+				doc:name="Set http.status to 500" />
+			<set-payload
+				value="#['Some exception was thrown by the HTTP module' + exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+
+
+
+		<catch-exception-strategy
+			when="#[exception.causeMatches('java.net.UnknownHostException')]"
+			doc:name="Catch SOAP java.net.UnknownHostException Strategy">
+			<set-property propertyName="http.status" value="#['500']"
+				doc:name="Property" />
+			<set-payload
+				value="#['Unknown Host Exception for REST service endpoint - check the application configuration: ' + exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+
+		<catch-exception-strategy
+			when="#[exception.causeMatches('org.mule.module.http.*')]" doc:name="Catch org.mule.module.http Exception Strategy">
+			<set-property propertyName="http.status" value="500"
+				doc:name="http.status to 404" />
+			<set-payload
+				value="#['The REST Request made a bad HTTP Request: ' + exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+
+		<exception-strategy ref="Default_Choice_Exception_Strategy"
+			doc:name="Reference Default Exception Strategy" />
+	</choice-exception-strategy>
+	<choice-exception-strategy name="Soap_Choice_Exception_Strategy">
+		<catch-exception-strategy
+			when="#[exception.causeMatches('org.mule.module.ws.consumer.*')]"
+			doc:name="Catch SOAP org.mule.module.ws.consumer Exception Strategy">
+			<set-property propertyName="http.status" value="#['500']"
+				doc:name="Property" />
+			<set-payload value="#['A SOAP Fault occured: ' + exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+		<catch-exception-strategy
+			when="#[exception.causeMatches('org.mule.module.http.*')]" doc:name="Catch org.mule.module.http Exception Strategy">
+			<set-property propertyName="http.status" value="500"
+				doc:name="http.status to 404" />
+			<set-payload
+				value="#['The Web Service Consumer made a bad HTTP Request: ' + exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+		<catch-exception-strategy
+			when="#[exception.causeMatches('org.apache.cxf.*')]" doc:name="Catch org.apache.cxf Exception Strategy">
+			<set-property propertyName="http.status" value="500"
+				doc:name="Set http.status to 503" />
+			<set-payload
+				value="#['The Web Service Consumer made a bad HTTP Request: ' + exception]"
+				doc:name="Copy_of_Set Payload" />
+		</catch-exception-strategy>
+		<catch-exception-strategy
+			when="#[exception.causeMatches('org.mule.module.ws.consumer.*')]"
+			doc:name="Catch SOAP javax.wsdl Exception Strategy">
+			<set-property propertyName="http.status" value="#['500']"
+				doc:name="Copy_of_Property" />
+			<set-payload value="#['A SOAP Fault occured: ' + exception]"
+				doc:name="Copy_of_Set Payload" />
+		</catch-exception-strategy>
+		<catch-exception-strategy
+			when="#[exception.causeMatches('org.mule.module.ws.consumer.*')]"
+			doc:name="Copy_of_Catch SOAP org.mule.api Exception Strategy">
+			<set-property propertyName="http.status" value="#['500']"
+				doc:name="Copy_of_Copy_of_Property" />
+			<set-payload value="#['A SOAP Fault occured: ' + exception]"
+				doc:name="Copy_of_Copy_of_Set Payload" />
+		</catch-exception-strategy>
+		<catch-exception-strategy
+			when="#[exception.causeMatches('java.net.UnknownHostException')]"
+			doc:name="Catch SOAP java.net.UnknownHostException Strategy">
+			<set-property propertyName="http.status" value="#['500']"
+				doc:name="Property" />
+			<set-payload
+				value="#['Unknown Host Exception - check the application configuration: ' + exception]"
+				doc:name="Set Payload" />
+		</catch-exception-strategy>
+        <exception-strategy ref="Default_Choice_Exception_Strategy" doc:name="Reference Exception Strategy"/>
+        </choice-exception-strategy>
+
+
+
+
+
+
+</mule>
